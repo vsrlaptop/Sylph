@@ -1,9 +1,10 @@
-import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'dart:io' show Platform;
 
-/// Push notification service for Sylph app
+/// Local notification service for Sylph app
 class NotificationService {
   static final NotificationService _instance = NotificationService._internal();
-  final FirebaseMessaging _firebaseMessaging = FirebaseMessaging.instance;
+  late FlutterLocalNotificationsPlugin _flutterLocalNotificationsPlugin;
 
   NotificationService._internal();
 
@@ -11,121 +12,282 @@ class NotificationService {
     return _instance;
   }
 
-  /// Initialize Firebase Cloud Messaging
+  /// Initialize local notifications
   Future<void> initializeNotifications() async {
+    _flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+
+    // Android initialization settings
+    const AndroidInitializationSettings androidInitializationSettings =
+        AndroidInitializationSettings('app_icon');
+
+    // iOS initialization settings
+    const DarwinInitializationSettings iosInitializationSettings =
+        DarwinInitializationSettings(
+      requestAlertPermission: true,
+      requestBadgePermission: true,
+      requestSoundPermission: true,
+    );
+
+    final InitializationSettings initializationSettings =
+        InitializationSettings(
+      android: androidInitializationSettings,
+      iOS: iosInitializationSettings,
+    );
+
     try {
-      // Request notification permissions (iOS)
-      NotificationSettings settings = await _firebaseMessaging.requestPermission(
-        alert: true,
-        announcement: false,
-        badge: true,
-        carryForward: true,
-        critical: false,
-        provisional: false,
-        sound: true,
+      await _flutterLocalNotificationsPlugin.initialize(
+        initializationSettings,
+        onDidReceiveNotificationResponse: _handleNotificationTap,
       );
 
-      if (settings.authorizationStatus == AuthorizationStatus.authorized) {
-        print('User granted notification permission');
-      } else if (settings.authorizationStatus == AuthorizationStatus.provisional) {
-        print('User granted provisional notification permission');
-      } else {
-        print('User declined notification permission');
+      // Create notification channels for Android
+      if (Platform.isAndroid) {
+        await _createNotificationChannels();
       }
 
-      // Handle foreground messages
-      FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-        print('Got a message whilst in the foreground!');
-        print('Message data: ${message.data}');
+      // Request permissions (iOS)
+      if (Platform.isIOS) {
+        await _flutterLocalNotificationsPlugin
+            .resolvePlatformSpecificImplementation<
+                IOSFlutterLocalNotificationsPlugin>()
+            ?.requestPermissions(
+              alert: true,
+              badge: true,
+              sound: true,
+            );
+      }
 
-        if (message.notification != null) {
-          print('Message also contained a notification: ${message.notification!.title}');
-          _handleNotification(message);
-        }
-      });
-
-      // Handle background messages
-      FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-        print('A new onMessageOpenedApp event was published!');
-        _handleNotification(message);
-      });
-
-      // Get FCM token for device
-      String? token = await _firebaseMessaging.getToken();
-      print('FCM Token: $token');
+      print('Notifications initialized successfully');
     } catch (e) {
       print('Error initializing notifications: $e');
     }
   }
 
-  /// Handle incoming notification
-  void _handleNotification(RemoteMessage message) {
-    // Process weather alerts or air quality warnings here
-    if (message.data.containsKey('type')) {
-      final type = message.data['type'];
-      print('Notification type: $type');
+  /// Create Android notification channels
+  Future<void> _createNotificationChannels() async {
+    // Weather alerts channel
+    const AndroidNotificationChannel weatherChannel =
+        AndroidNotificationChannel(
+      'weather_alerts',
+      'Weather Alerts',
+      description: 'Weather condition alerts and warnings',
+      importance: Importance.high,
+      enableVibration: true,
+      soundSource: RawResourceAndroidNotificationSound('notification'),
+    );
 
-      switch (type) {
-        case 'weather_alert':
-          print('Weather alert: ${message.data['title']}');
-          break;
-        case 'air_quality_warning':
-          print('Air quality warning: ${message.data['aqi']}');
-          break;
-        default:
-          print('Unknown notification type');
-      }
-    }
+    // Air quality channel
+    const AndroidNotificationChannel aqiChannel =
+        AndroidNotificationChannel(
+      'aqi_warnings',
+      'Air Quality Warnings',
+      description: 'Air quality index and pollution alerts',
+      importance: Importance.high,
+      enableVibration: true,
+      soundSource: RawResourceAndroidNotificationSound('notification'),
+    );
+
+    // Reminders channel
+    const AndroidNotificationChannel reminderChannel =
+        AndroidNotificationChannel(
+      'reminders',
+      'Reminders',
+      description: 'Daily weather reminders',
+      importance: Importance.default_,
+      enableVibration: false,
+    );
+
+    await _flutterLocalNotificationsPlugin
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>()
+        ?.createNotificationChannel(weatherChannel);
+
+    await _flutterLocalNotificationsPlugin
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>()
+        ?.createNotificationChannel(aqiChannel);
+
+    await _flutterLocalNotificationsPlugin
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>()
+        ?.createNotificationChannel(reminderChannel);
   }
 
-  /// Get FCM token
-  Future<String?> getToken() async {
-    try {
-      return await _firebaseMessaging.getToken();
-    } catch (e) {
-      print('Error getting FCM token: $e');
-      return null;
-    }
+  /// Handle notification tap
+  void _handleNotificationTap(NotificationResponse notificationResponse) {
+    print('Notification tapped: ${notificationResponse.payload}');
+    // Handle navigation or action based on payload
   }
 
-  /// Subscribe to weather alerts topic
-  Future<void> subscribeToWeatherAlerts() async {
-    try {
-      await _firebaseMessaging.subscribeToTopic('weather_alerts');
-      print('Subscribed to weather alerts');
-    } catch (e) {
-      print('Error subscribing to weather alerts: $e');
-    }
+  /// Show weather alert notification
+  Future<void> showWeatherAlert({
+    required String city,
+    required String condition,
+    required String description,
+  }) async {
+    const AndroidNotificationDetails androidDetails =
+        AndroidNotificationDetails(
+      'weather_alerts',
+      'Weather Alerts',
+      channelDescription: 'Weather condition alerts',
+      importance: Importance.high,
+      priority: Priority.high,
+      ticker: 'Weather Alert',
+    );
+
+    const DarwinNotificationDetails iosDetails =
+        DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
+    );
+
+    const NotificationDetails platformChannelSpecifics =
+        NotificationDetails(android: androidDetails, iOS: iosDetails);
+
+    await _flutterLocalNotificationsPlugin.show(
+      1,
+      '🌤️ $condition in $city',
+      description,
+      platformChannelSpecifics,
+      payload: 'weather_alert:$city',
+    );
+
+    print('Weather alert shown for $city');
   }
 
-  /// Subscribe to air quality warnings topic
-  Future<void> subscribeToAQIWarnings() async {
-    try {
-      await _firebaseMessaging.subscribeToTopic('aqi_warnings');
-      print('Subscribed to AQI warnings');
-    } catch (e) {
-      print('Error subscribing to AQI warnings: $e');
-    }
+  /// Show air quality warning notification
+  Future<void> showAQIWarning({
+    required String city,
+    required int aqi,
+    required String level,
+    required String recommendation,
+  }) async {
+    final String title = _getAQIEmoji(aqi) + ' Air Quality Warning - $city';
+    final String body = '$level (AQI: $aqi)\n$recommendation';
+
+    const AndroidNotificationDetails androidDetails =
+        AndroidNotificationDetails(
+      'aqi_warnings',
+      'Air Quality Warnings',
+      channelDescription: 'Air quality index alerts',
+      importance: Importance.high,
+      priority: Priority.high,
+      ticker: 'AQI Alert',
+    );
+
+    const DarwinNotificationDetails iosDetails =
+        DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
+    );
+
+    const NotificationDetails platformChannelSpecifics =
+        NotificationDetails(android: androidDetails, iOS: iosDetails);
+
+    await _flutterLocalNotificationsPlugin.show(
+      2,
+      title,
+      body,
+      platformChannelSpecifics,
+      payload: 'aqi_warning:$city:$aqi',
+    );
+
+    print('AQI warning shown for $city (Level: $level)');
   }
 
-  /// Unsubscribe from topics
-  Future<void> unsubscribeFromTopics() async {
-    try {
-      await _firebaseMessaging.unsubscribeFromTopic('weather_alerts');
-      await _firebaseMessaging.unsubscribeFromTopic('aqi_warnings');
-      print('Unsubscribed from all topics');
-    } catch (e) {
-      print('Error unsubscribing: $e');
-    }
+  /// Schedule daily weather reminder
+  Future<void> scheduleDailyWeatherNotification({
+    required int hour,
+    required int minute,
+    required String title,
+    required String body,
+  }) async {
+    const AndroidNotificationDetails androidDetails =
+        AndroidNotificationDetails(
+      'reminders',
+      'Reminders',
+      channelDescription: 'Daily weather reminders',
+      importance: Importance.default_,
+      priority: Priority.default_,
+    );
+
+    const DarwinNotificationDetails iosDetails =
+        DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: false,
+    );
+
+    const NotificationDetails platformChannelSpecifics =
+        NotificationDetails(android: androidDetails, iOS: iosDetails);
+
+    await _flutterLocalNotificationsPlugin.zonedSchedule(
+      3,
+      title,
+      body,
+      _nextInstanceOfTime(hour, minute),
+      platformChannelSpecifics,
+      androidScheduleMode: AndroidScheduleMode.exactAndAllowWhileIdle,
+      uiLocalNotificationDateInterpretation:
+          UILocalNotificationDateInterpretation.absoluteTime,
+      matchDateTimeComponents: DateTimeComponents.time,
+      payload: 'daily_reminder',
+    );
+
+    print('Daily reminder scheduled for $hour:$minute');
   }
-}
 
-/// Background message handler (must be a top-level function)
-Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  print("Handling a background message: ${message.messageId}");
-  print('Message data: ${message.data}');
+  /// Show temperature extreme alert
+  Future<void> showTemperatureAlert({
+    required String city,
+    required double temp,
+    required String condition,
+  }) async {
+    final String emoji = temp > 35 ? '🔥' : '❄️';
+    final String type = temp > 35 ? 'Heat' : 'Cold';
 
-  if (message.notification != null) {
-    print('Message also contained a notification: ${message.notification!.title}');
+    await showWeatherAlert(
+      city: city,
+      condition: '$emoji $type Alert',
+      description: 'Temperature: ${temp.toStringAsFixed(1)}°C\n$condition',
+    );
+  }
+
+  /// Cancel specific notification
+  Future<void> cancelNotification(int id) async {
+    await _flutterLocalNotificationsPlugin.cancel(id);
+    print('Notification $id cancelled');
+  }
+
+  /// Cancel all notifications
+  Future<void> cancelAllNotifications() async {
+    await _flutterLocalNotificationsPlugin.cancelAll();
+    print('All notifications cancelled');
+  }
+
+  // Helper methods
+
+  /// Get AQI emoji based on level
+  String _getAQIEmoji(int aqi) {
+    if (aqi <= 50) return '✅';
+    if (aqi <= 100) return '🟡';
+    if (aqi <= 150) return '🟠';
+    if (aqi <= 200) return '🔴';
+    if (aqi <= 300) return '🟣';
+    return '⚫';
+  }
+
+  /// Calculate next instance of time
+  DateTime _nextInstanceOfTime(int hour, int minute) {
+    final DateTime now = DateTime.now();
+    DateTime scheduledDate = DateTime(now.year, now.month, now.day, hour, minute);
+
+    if (scheduledDate.isBefore(now)) {
+      scheduledDate = scheduledDate.add(const Duration(days: 1));
+    }
+
+    return scheduledDate;
   }
 }
